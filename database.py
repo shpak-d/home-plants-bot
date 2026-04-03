@@ -6,22 +6,26 @@ cur = conn.cursor()
 
 
 def init_db():
-    cur.execute('''CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        username TEXT
-    )''')
-
+    # Створюємо таблицю plants
     cur.execute('''CREATE TABLE IF NOT EXISTS plants (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
         name TEXT NOT NULL,
         watering_interval INTEGER DEFAULT 7,
-        is_bottom_watering INTEGER DEFAULT 0,   -- 1 = нижній полив
-        leaf_wash_interval INTEGER DEFAULT 14,
+        bottom_watering_interval INTEGER DEFAULT 14,
+        photo_file_id TEXT,
         last_watered TEXT,
-        last_washed TEXT
+        last_washed TEXT,
+        last_photo_update TEXT
     )''')
 
+    # Таблиця користувачів
+    cur.execute('''CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        username TEXT
+    )''')
+
+    # Таблиця логів дій
     cur.execute('''CREATE TABLE IF NOT EXISTS action_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         plant_id INTEGER,
@@ -30,17 +34,33 @@ def init_db():
         username TEXT,
         timestamp TEXT
     )''')
+
     conn.commit()
+    print("✅ База даних ініціалізована успішно")
 
 
-def add_plant(user_id: int, name: str, watering_days: int, is_bottom: bool):
+def add_plant(user_id: int, name: str, watering_days: int, bottom_days: int, photo_file_id=None):
     cur.execute('''INSERT INTO plants 
-        (user_id, name, watering_interval, is_bottom_watering, last_watered, last_washed)
-        VALUES (?, ?, ?, ?, ?, ?)''',
-                (user_id, name, watering_days, int(is_bottom),
-                 datetime.now().isoformat(), datetime.now().isoformat()))
+        (user_id, name, watering_interval, bottom_watering_interval, photo_file_id, 
+         last_watered, last_washed, last_photo_update)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+        (user_id, name, watering_days, bottom_days,
+         photo_file_id,
+         datetime.now().isoformat(),
+         datetime.now().isoformat(),
+         datetime.now().isoformat()))
     conn.commit()
     return cur.lastrowid
+
+
+def get_plant_by_id(plant_id: int):
+    cur.execute("SELECT * FROM plants WHERE id = ?", (plant_id,))
+    return cur.fetchone()
+
+
+def delete_plant(plant_id: int):
+    cur.execute("DELETE FROM plants WHERE id = ?", (plant_id,))
+    conn.commit()
 
 
 def get_user_plants(user_id: int):
