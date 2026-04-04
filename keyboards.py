@@ -1,4 +1,4 @@
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 def main_menu():
     kb = [
@@ -7,4 +7,4 @@ def main_menu():
         [KeyboardButton(text="💧 Полив"), KeyboardButton(text="🧼 Помити листя")],
         [KeyboardButton(text="🤖 Порада від AI")]
     ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, input_field_placeholder="Обери дію...")
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
