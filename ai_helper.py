@@ -1,5 +1,4 @@
 from google import genai
-from google.genai.types import Part
 from dotenv import load_dotenv
 import os
 
@@ -7,24 +6,33 @@ load_dotenv()
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
+
 async def get_advice(plant):
-    """Проста текстова порада (поки без фото)"""
+    # plant — це кортеж з БД:
+    # (id, name, watering_interval, bottom_watering_interval, photo_file_id, last_watered, last_washed, last_photo_update)
+
+    name = plant[1]
+    watering_interval = plant[2]
+    bottom_interval = plant[3]
+    last_watered = plant[5][:10] if plant[5] else "невідомо"
+    last_washed = plant[6][:10] if plant[6] else "невідомо"
+
     prompt = f"""
 Ти — досвідчений ботанік по кімнатних рослинах.
 
-Рослина: {plant[2]}
-Звичайний полив: кожні {plant[3]} днів
-Нижній полив: кожні {plant[4]} днів
-Останній полив: {plant[6] if plant[6] else 'невідомо'}
-Останнє миття листя: {plant[7] if plant[7] else 'невідомо'}
+Рослина: {name}
+Звичайний полив: кожні {watering_interval} днів
+Нижній полив (в таз): кожні {bottom_interval} днів
+Останній полив: {last_watered}
+Останнє миття листя: {last_washed}
 
-Дай коротку, корисну пораду українською мовою на найближчі 7 днів.
-Напиши дружньо:
+Дай коротку, корисну пораду українською мовою на найближчі 5–7 днів.
+Напиши:
 - чи треба поливати найближчим часом
-- можливі проблеми
-- що рекомендуєш зробити
+- чи є ризики переливу або пересушування
+- рекомендації по догляду (листя, світло тощо)
 
-Відповідай природно і без зайвої води.
+Відповідай природно, дружньо і без зайвої води.
 """
 
     try:
@@ -34,4 +42,4 @@ async def get_advice(plant):
         )
         return response.text.strip()
     except Exception as e:
-        return f"Вибач, зараз не можу отримати пораду.\nПомилка: {str(e)}"
+        return f"Вибач, не вдалося отримати пораду.\nПомилка: {str(e)}"

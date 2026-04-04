@@ -4,12 +4,15 @@ from datetime import datetime
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton   # ← додав тут
-
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 import os
 
-from database import add_plant, get_user_plants, log_action, update_last_watered, update_last_washed, delete_plant, get_plant_by_id
+from database import (
+    add_plant, get_all_plants, get_plant_by_id,
+    update_last_watered, update_last_washed, delete_plant,
+    add_user
+)
 from ai_helper import get_advice
 from keyboards import main_menu
 
@@ -19,214 +22,193 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# =================== СТАРТ ===================
+# ====================== НАЛАШТУВАННЯ ======================
+ALLOWED_USERS_STR = os.getenv("ALLOWED_USERS", "")
+ALLOWED_USERS = [int(x.strip()) for x in ALLOWED_USERS_STR.split(",") if x.strip().isdigit()]
+
+
+def is_allowed(user_id: int) -> bool:
+    return user_id in ALLOWED_USERS
+
+
+# ====================== СТАРТ ======================
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    if not is_allowed(message.from_user.id):
+        await message.answer("❌ Ви не маєте доступу до цього бота.")
+        return
+
+    add_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+
     await message.answer(
-        "🌿 Привіт! Я твій помічник по кімнатних рослинах.",
+        "🌿 Бот готовий!\nРослини спільні для двох користувачів.",
         reply_markup=main_menu()
     )
 
-# =================== ДОДАВАННЯ РОСЛИНИ ===================
+
+# ====================== ДОДАВАННЯ РОСЛИНИ ======================
 @dp.message(F.text == "➕ Додати рослину")
 async def add_plant_start(message: types.Message):
+    if not is_allowed(message.from_user.id): return
     await message.answer(
-        "Напиши дані про рослину в форматі:\n"
-        "<b>Назва інтервал_поливу інтервал_нижнього_поливу</b>\n\n"
-        "Приклад:\n"
-        "Фікус 7 14\n"
-        "Монстера 10 30\n\n"
-        "Де:\n"
-        "• Перше число — звичайний полив (днів)\n"
-        "• Друге число — нижній полив (днів)",
+        "Напиши:\n<b>Назва інтервал_поливу інтервал_нижнього</b>\n\n"
+        "Приклад: Фікус 7 14",
         parse_mode="HTML"
     )
+
 
 @dp.message(F.text.regexp(r'^(.+?)\s+(\d+)\s+(\d+)$'))
 async def process_add_plant(message: types.Message):
+    if not is_allowed(message.from_user.id): return
     try:
-        # Розбиваємо текст правильно
         parts = message.text.strip().split()
-        if len(parts) < 3:
-            raise ValueError("Недостатньо даних")
-
-        # Назва може складатися з кількох слів, останні два — числа
+        name = " ".join(parts[:-2])
         watering = int(parts[-2])
         bottom = int(parts[-1])
-        name = " ".join(parts[:-2])   # все, що перед двома числами — назва рослини
 
-        if watering <= 0 or bottom <= 0:
-            await message.answer("Інтервали повинні бути більшими за 0.")
-            return
-
-        plant_id = add_plant(message.from_user.id, name, watering, bottom)
-
-        await message.answer(
-            f"✅ Рослина <b>«{name}»</b> успішно додана!\n\n"
-            f"Звичайний полив: кожні {watering} днів\n"
-            f"Нижній полив: кожні {bottom} днів",
-            parse_mode="HTML",
-            reply_markup=main_menu()
-        )
-    except Exception:
-        await message.answer(
-            "❌ Неправильний формат!\n\n"
-            "Правильний приклад:\n"
-            "<b>Фікус 7 14</b>\n"
-            "<b>Монстера 10 21</b>\n"
-            "<b>Сансевієрія 14 30</b>\n\n"
-            "Назва + два числа через пробіл",
-            parse_mode="HTML"
-        )
+        add_plant(name, watering, bottom)
+        await message.answer(f"✅ Рослина «{name}» додана!", reply_markup=main_menu())
+    except:
+        await message.answer("❌ Неправильний формат. Приклад: Фікус 7 14")
 
 
+# ====================== СПІЛЬНІ РОСЛИНИ ======================
 @dp.message(F.text == "🌱 Мої рослини")
 async def my_plants(message: types.Message):
-    plants = get_user_plants(message.from_user.id)
+    if not is_allowed(message.from_user.id): return
 
+    plants = get_all_plants()
     if not plants:
-        await message.answer("У тебе поки немає доданих рослин.")
+        await message.answer("Поки немає рослин.")
         return
 
-    text = "🌿 <b>Твої рослини:</b>\n\n"
+    text = "🌿 <b>Спільні рослини:</b>\n\n"
     for p in plants:
-        bottom_text = f", нижній полив кожні {p[4]} днів" if p[4] else ""
-        text += f"• <b>{p[2]}</b> — полив кожні {p[3]} днів{bottom_text}\n"
-
+        last = p[5][:10] if p[5] else "—"
+        text += f"• <b>{p[1]}</b> — полив кожні {p[2]} днів (останній: {last})\n"
     await message.answer(text, parse_mode="HTML")
 
 
-# =================== ВИДАЛЕННЯ (залишаємо текстове, бо небезпечно) ===================
-@dp.message(F.text == "🗑 Видалити рослину")
-async def delete_plant_start(message: types.Message):
-    plants = get_user_plants(message.from_user.id)
-    if not plants:
-        await message.answer("У тебе немає рослин.")
-        return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[])
-    for plant in plants:
-        kb.inline_keyboard.append([
-            InlineKeyboardButton(
-                text=f"🗑 {plant[2]}",
-                callback_data=f"delete_{plant[0]}"
-            )
-        ])
-
-    await message.answer("Яку рослину видалити? (ця дія незворотна)", reply_markup=kb)
-
-# =================== ПОРАДА ВІД AI ===================
-@dp.message(F.text == "🤖 Порада від AI")
-async def advice_start(message: types.Message):
-    plants = get_user_plants(message.from_user.id)
-    if not plants:
-        await message.answer("Спочатку додай рослину.")
-        return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[])
-    for plant in plants:
-        kb.inline_keyboard.append([
-            InlineKeyboardButton(
-                text=f"🤖 {plant[2]}",
-                callback_data=f"advice_{plant[0]}"
-            )
-        ])
-
-    await message.answer("По якій рослині дати пораду?", reply_markup=kb)
-
-# =================== ПОМИТИ ЛИСТЯ ===================
-@dp.message(F.text == "🧼 Помити листя")
-async def wash_start(message: types.Message):
-    plants = get_user_plants(message.from_user.id)
-    if not plants:
-        await message.answer("У тебе немає рослин.")
-        return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[])
-    for plant in plants:
-        kb.inline_keyboard.append([
-            InlineKeyboardButton(
-                text=f"🧼 {plant[2]}",
-                callback_data=f"wash_{plant[0]}"
-            )
-        ])
-
-    await message.answer("Яке листя миємо?", reply_markup=kb)
-
-# =================== ПОЛИВ ===================
+# ====================== КНОПКИ ДІЙ ======================
 @dp.message(F.text == "💧 Полив")
 async def water_start(message: types.Message):
-    plants = get_user_plants(message.from_user.id)
+    if not is_allowed(message.from_user.id): return
+    plants = get_all_plants()
     if not plants:
-        await message.answer("У тебе немає рослин.")
+        await message.answer("Немає рослин.")
         return
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[])
-    for plant in plants:
-        kb.inline_keyboard.append([
-            InlineKeyboardButton(
-                text=f"💧 {plant[2]}",
-                callback_data=f"water_{plant[0]}"
-            )
-        ])
-
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"💧 {p[1]}", callback_data=f"water_{p[0]}")] for p in plants
+    ])
     await message.answer("Яку рослину поливаємо?", reply_markup=kb)
 
 
-# =================== CALLBACK ОБРОБНИКИ ===================
-@dp.callback_query(F.data.startswith("water_"))
-async def callback_water(callback: types.CallbackQuery):
-    plant_id = int(callback.data.split("_")[1])
-    plant = get_plant_by_id(plant_id)
-
-    if not plant or plant[1] != callback.from_user.id:
-        await callback.answer("Це не твоя рослина!", show_alert=True)
+@dp.message(F.text == "🧼 Помити листя")
+async def wash_start(message: types.Message):
+    if not is_allowed(message.from_user.id): return
+    plants = get_all_plants()
+    if not plants:
+        await message.answer("Немає рослин.")
         return
 
-    update_last_watered(plant_id)
-    log_action(plant_id, "полив", callback.from_user.id, callback.from_user.username or "unknown")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"🧼 {p[1]}", callback_data=f"wash_{p[0]}")] for p in plants
+    ])
+    await message.answer("Яке листя миємо?", reply_markup=kb)
 
-    await callback.message.edit_text(
-        f"✅ Полито!\n\n💧 Рослина <b>{plant[2]}</b> успішно полита.",
-        parse_mode="HTML"
-    )
-    await callback.answer("Записано ✓")
+
+@dp.message(F.text == "🤖 Порада від AI")
+async def advice_start(message: types.Message):
+    if not is_allowed(message.from_user.id): return
+    plants = get_all_plants()
+    if not plants:
+        await message.answer("Немає рослин.")
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"🤖 {p[1]}", callback_data=f"advice_{p[0]}")] for p in plants
+    ])
+    await message.answer("По якій рослині дати пораду?", reply_markup=kb)
+
+
+@dp.message(F.text == "🗑 Видалити рослину")
+async def delete_start(message: types.Message):
+    if not is_allowed(message.from_user.id): return
+    plants = get_all_plants()
+    if not plants:
+        await message.answer("Немає рослин.")
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"🗑 {p[1]}", callback_data=f"delete_{p[0]}")] for p in plants
+    ])
+    await message.answer("Яку рослину видалити? (незворотньо)", reply_markup=kb)
+
+
+# ====================== CALLBACK ОБРОБНИКИ ======================
+@dp.callback_query(F.data.startswith("water_"))
+async def callback_water(callback: types.CallbackQuery):
+    if not is_allowed(callback.from_user.id):
+        await callback.answer("Доступ заборонено", show_alert=True)
+        return
+    plant_id = int(callback.data.split("_")[1])
+    plant = get_plant_by_id(plant_id)
+    if not plant: return
+
+    update_last_watered(plant_id)
+    username = callback.from_user.username or callback.from_user.first_name
+
+    await callback.message.edit_text(f"✅ Полито!\n💧 <b>{plant[1]}</b>")
+
+    # Сповіщення іншому користувачу
+    for uid in ALLOWED_USERS:
+        if uid != callback.from_user.id:
+            try:
+                await bot.send_message(uid, f"💧 @{username} полив(ла) **{plant[1]}**")
+            except:
+                pass
+    await callback.answer("Записано")
 
 
 @dp.callback_query(F.data.startswith("wash_"))
 async def callback_wash(callback: types.CallbackQuery):
+    if not is_allowed(callback.from_user.id):
+        await callback.answer("Доступ заборонено", show_alert=True)
+        return
     plant_id = int(callback.data.split("_")[1])
     plant = get_plant_by_id(plant_id)
-
-    if not plant or plant[1] != callback.from_user.id:
-        await callback.answer("Це не твоя рослина!", show_alert=True)
-        return
+    if not plant: return
 
     update_last_washed(plant_id)
-    log_action(plant_id, "миття листя", callback.from_user.id, callback.from_user.username or "unknown")
+    username = callback.from_user.username or callback.from_user.first_name
 
-    await callback.message.edit_text(
-        f"✅ Листя помито!\n\n🧼 Рослина <b>{plant[2]}</b>",
-        parse_mode="HTML"
-    )
-    await callback.answer("Записано ✓")
+    await callback.message.edit_text(f"✅ Листя помито!\n🧼 <b>{plant[1]}</b>")
+
+    for uid in ALLOWED_USERS:
+        if uid != callback.from_user.id:
+            try:
+                await bot.send_message(uid, f"🧼 @{username} помив(ла) листя у **{plant[1]}**")
+            except:
+                pass
+    await callback.answer("Записано")
 
 
 @dp.callback_query(F.data.startswith("advice_"))
 async def callback_advice(callback: types.CallbackQuery):
+    if not is_allowed(callback.from_user.id):
+        await callback.answer("Доступ заборонено", show_alert=True)
+        return
     plant_id = int(callback.data.split("_")[1])
     plant = get_plant_by_id(plant_id)
+    if not plant: return
 
-    if not plant or plant[1] != callback.from_user.id:
-        await callback.answer("Це не твоя рослина!", show_alert=True)
-        return
-
-    await callback.message.edit_text(f"🤖 Думаю пораду для «{plant[2]}»...")
+    await callback.message.edit_text(f"🤖 Генерую пораду для «{plant[1]}»...")
 
     advice_text = await get_advice(plant)
 
     await callback.message.edit_text(
-        f"🌱 <b>{plant[2]}</b>\n\n{advice_text}",
+        f"🌱 <b>{plant[1]}</b>\n\n{advice_text}",
         parse_mode="HTML"
     )
     await callback.answer("Готово")
@@ -234,24 +216,26 @@ async def callback_advice(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("delete_"))
 async def callback_delete(callback: types.CallbackQuery):
+    if not is_allowed(callback.from_user.id):
+        await callback.answer("Доступ заборонено", show_alert=True)
+        return
     plant_id = int(callback.data.split("_")[1])
     plant = get_plant_by_id(plant_id)
+    if not plant: return
 
-    if not plant or plant[1] != callback.from_user.id:
-        await callback.answer("Це не твоя рослина!", show_alert=True)
-        return
-
-    name = plant[2]
+    name = plant[1]
     delete_plant(plant_id)
 
     await callback.message.edit_text(f"🗑 Рослину «{name}» видалено.")
     await callback.answer("Видалено", show_alert=True)
 
-# =================== ЗАПУСК ===================
+
+# ====================== ЗАПУСК ======================
 async def main():
     logging.basicConfig(level=logging.INFO)
     print("🌱 Бот запущений...")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
