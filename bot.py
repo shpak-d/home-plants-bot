@@ -15,6 +15,10 @@ from database import (
 )
 from ai_helper import get_advice
 from keyboards import main_menu
+# Стан для додавання рослини
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+
 
 load_dotenv()
 
@@ -46,33 +50,76 @@ async def cmd_start(message: types.Message):
     )
 
 
-# ====================== ДОДАВАННЯ РОСЛИНИ ======================
+# ====================== ДОДАВАННЯ РОСЛИНИ З ФОТО ======================
+
+class AddPlant(StatesGroup):
+    waiting_for_name = State()
+    waiting_for_photo = State()
+
+
 @dp.message(F.text == "➕ Додати рослину")
-async def add_plant_start(message: types.Message):
-    if not is_allowed(message.from_user.id): return
+async def add_plant_start(message: types.Message, state: FSMContext):
+    if not is_allowed(message.from_user.id):
+        return
     await message.answer(
-        "Напиши:\n<b>Назва інтервал_поливу інтервал_нижнього</b>\n\n"
-        "Приклад: Фікус 7 14",
-        parse_mode="HTML"
+        "Напиши дані рослини:\n"
+        "<b>Назва полив нижній_полив</b>\n\n"
+        "Приклад: Фікус 7 14"
     )
+    await state.set_state(AddPlant.waiting_for_name)
 
 
-@dp.message(F.text.regexp(r'^(.+?)\s+(\d+)\s+(\d+)$'))
-async def process_add_plant(message: types.Message):
-    if not is_allowed(message.from_user.id): return
+@dp.message(AddPlant.waiting_for_name)
+async def process_plant_name(message: types.Message, state: FSMContext):
+    if not is_allowed(message.from_user.id):
+        return
     try:
         parts = message.text.strip().split()
         name = " ".join(parts[:-2])
         watering = int(parts[-2])
         bottom = int(parts[-1])
 
-        add_plant(name, watering, bottom)
-        await message.answer(f"✅ Рослина «{name}» додана!", reply_markup=main_menu())
+        await state.update_data(name=name, watering=watering, bottom=bottom)
+
+        await message.answer("Добре! Тепер надішли фото рослини (обов'язково).")
+        await state.set_state(AddPlant.waiting_for_photo)
     except:
-        await message.answer("❌ Неправильний формат. Приклад: Фікус 7 14")
+        await message.answer("❌ Неправильний формат.\nПриклад: Фікус 7 14\nСпробуй ще раз.")
+        await state.clear()
 
 
-# ====================== СПІЛЬНІ РОСЛИНИ ======================
+@dp.message(AddPlant.waiting_for_photo, F.photo)
+async def process_plant_photo(message: types.Message, state: FSMContext):
+    if not is_allowed(message.from_user.id):
+        return
+
+    data = await state.get_data()
+    name = data.get("name")
+    watering = data.get("watering")
+    bottom = data.get("bottom")
+
+    if not name:
+        await message.answer("Помилка стану. Почни додавання заново.")
+        await state.clear()
+        return
+
+    photo_file_id = message.photo[-1].file_id
+
+    add_plant(name, watering, bottom, photo_file_id)
+
+    await message.answer(
+        f"✅ Рослина «{name}» успішно додана з фото!",
+        reply_markup=main_menu()
+    )
+    await state.clear()
+
+
+# Якщо користувач надіслав щось інше замість фото
+@dp.message(AddPlant.waiting_for_photo)
+async def wrong_photo(message: types.Message):
+    await message.answer("Будь ласка, надішли саме **фото** рослини.")
+
+# ====================== СПІЛЬНІ РОСЛИНИ (з фото) ======================
 @dp.message(F.text == "🌱 Мої рослини")
 async def my_plants(message: types.Message):
     if not is_allowed(message.from_user.id): return
@@ -82,11 +129,12 @@ async def my_plants(message: types.Message):
         await message.answer("Поки немає рослин.")
         return
 
-    text = "🌿 <b>Спільні рослини:</b>\n\n"
-    for p in plants:
-        last = p[5][:10] if p[5] else "—"
-        text += f"• <b>{p[1]}</b> — полив кожні {p[2]} днів (останній: {last})\n"
-    await message.answer(text, parse_mode="HTML")
+    for plant in plants:
+        caption = f"🌿 <b>{plant[1]}</b>\nПолив: кожні {plant[2]} днів | Нижній: кожні {plant[3]} днів"
+        if plant[4]:  # photo_file_id
+            await message.answer_photo(photo=plant[4], caption=caption, parse_mode="HTML")
+        else:
+            await message.answer(caption, parse_mode="HTML")
 
 
 # ====================== КНОПКИ ДІЙ ======================
@@ -199,19 +247,44 @@ async def callback_advice(callback: types.CallbackQuery):
     if not is_allowed(callback.from_user.id):
         await callback.answer("Доступ заборонено", show_alert=True)
         return
+
     plant_id = int(callback.data.split("_")[1])
     plant = get_plant_by_id(plant_id)
-    if not plant: return
+    if not plant:
+        await callback.answer("Рослину не знайдено", show_alert=True)
+        return
 
-    await callback.message.edit_text(f"🤖 Генерую пораду для «{plant[1]}»...")
+    name = plant[1]
+    photo_file_id = plant[4]
+
+    await callback.message.edit_text(f"🤖 Генерую пораду для «{name}»...")
 
     advice_text = await get_advice(plant)
 
-    await callback.message.edit_text(
-        f"🌱 <b>{plant[1]}</b>\n\n{advice_text}",
-        parse_mode="HTML"
-    )
-    await callback.answer("Готово")
+    # Обмежуємо довжину підпису до 900 символів (з запасом)
+    if len(advice_text) > 900:
+        advice_text = advice_text[:897] + "..."
+
+    if photo_file_id:
+        try:
+            await callback.message.answer_photo(
+                photo=photo_file_id,
+                caption=f"🌱 <b>{name}</b>\n\n{advice_text}",
+                parse_mode="HTML"
+            )
+        except:
+            # Якщо навіть скорочений caption занадто довгий — надсилаємо без фото
+            await callback.message.answer(
+                f"🌱 <b>{name}</b>\n\n{advice_text}",
+                parse_mode="HTML"
+            )
+    else:
+        await callback.message.edit_text(
+            f"🌱 <b>{name}</b>\n\n{advice_text}",
+            parse_mode="HTML"
+        )
+
+    await callback.answer("Порада готова ✅")
 
 
 @dp.callback_query(F.data.startswith("delete_"))
@@ -229,6 +302,31 @@ async def callback_delete(callback: types.CallbackQuery):
     await callback.message.edit_text(f"🗑 Рослину «{name}» видалено.")
     await callback.answer("Видалено", show_alert=True)
 
+# ====================== НАГАДУВАННЯ (поки ручне) ======================
+@dp.message(Command("remind"))
+async def manual_remind(message: types.Message):
+    if not is_allowed(message.from_user.id): return
+    plants = get_all_plants()
+    if not plants:
+        await message.answer("Немає рослин.")
+        return
+
+    await message.answer("🔄 Перевіряю, кому треба поливати...")
+
+    for plant in plants:
+        if not plant[5]: continue  # немає дати останнього поливу
+        last_watered = datetime.fromisoformat(plant[5])
+        days_passed = (datetime.now() - last_watered).days
+
+        if days_passed >= plant[2] - 1:   # нагадуємо за 1 день до "терміну"
+            for uid in ALLOWED_USERS:
+                try:
+                    text = f"⚠️ Нагадування!\nРослина <b>{plant[1]}</b> не поливалась {days_passed} днів.\nРекомендується полити."
+                    await bot.send_message(uid, text, parse_mode="HTML")
+                except:
+                    pass
+
+    await message.answer("✅ Нагадування надіслано.")
 
 # ====================== ЗАПУСК ======================
 async def main():

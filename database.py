@@ -6,7 +6,6 @@ cur = conn.cursor()
 
 
 def init_db():
-    # Спільна таблиця рослин
     cur.execute('''CREATE TABLE IF NOT EXISTS plants (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -15,17 +14,15 @@ def init_db():
         photo_file_id TEXT,
         last_watered TEXT,
         last_washed TEXT,
-        last_photo_update TEXT
+        last_photo_update TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
 
-    # Таблиця користувачів для розсилки
     cur.execute('''CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
         username TEXT,
         first_name TEXT
     )''')
 
-    # Логи дій
     cur.execute('''CREATE TABLE IF NOT EXISTS action_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         plant_id INTEGER,
@@ -36,7 +33,7 @@ def init_db():
     )''')
 
     conn.commit()
-    print("✅ База даних ініціалізована (спільна для 2 користувачів)")
+    print("✅ База даних оновлена з підтримкою фото")
 
 
 def add_plant(name: str, watering_days: int, bottom_days: int, photo_file_id=None):
@@ -81,11 +78,6 @@ def add_user(user_id: int, username: str = None, first_name: str = None):
     cur.execute("INSERT OR IGNORE INTO users VALUES (?, ?, ?)",
                 (user_id, username, first_name))
     conn.commit()
-
-
-def get_all_users():
-    cur.execute("SELECT user_id FROM users")
-    return [row[0] for row in cur.fetchall()]
 
 
 init_db()
